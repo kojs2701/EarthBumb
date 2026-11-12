@@ -118,6 +118,7 @@ input[type="range"]::-moz-range-thumb { width: 8px; height: 8px; background: #d7
 .drag-hint { display: flex; align-items: center; gap: 8px; }
 .mouse-icon { color: #6dcfe8; font-size: 15px; }
 .hint-divider { color: #3d4960; }
+.touch-zoom { display: none; }
 .planet-scale { display: flex; align-items: center; gap: 8px; }
 .planet-scale span { color: #67748c; font-size: 8px; }
 .planet-scale strong { color: #b6c3d8; font-family: 'DM Mono', monospace; font-size: 10px; font-weight: 400; }
@@ -161,6 +162,8 @@ input[type="range"]::-moz-range-thumb { width: 8px; height: 8px; background: #d7
   .panel-footer { grid-column: 1 / -1; margin-top: 10px; }
   .simulation-stage { height: min(56vh, 500px); min-height: 340px; flex: none; padding: 18px 17px 12px; }
   .coordinate-readout { font-size: 7px; }
+  .desktop-zoom { display: none; }
+  .touch-zoom { display: inline; }
   .stage-readouts { gap: 8px; }
   .population-card { min-width: 130px; padding: 6px 8px; }
   .population-meta strong { font-size: 11px; }

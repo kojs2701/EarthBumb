@@ -23,6 +23,17 @@
     [[-180, -72], [-140, -76], [-90, -73], [-40, -78], [10, -73], [60, -77], [110, -71], [160, -75], [180, -70], [180, -90], [-180, -90]]
   ];
 
+  const landPolygons = landmasses.map(points => ({
+    points,
+    minLongitude: Math.min(...points.map(point => point[0])),
+    maxLongitude: Math.max(...points.map(point => point[0])),
+    minLatitude: Math.min(...points.map(point => point[1])),
+    maxLatitude: Math.max(...points.map(point => point[1]))
+  }));
+  const landMapWidth = 1440;
+  const landMapHeight = 720;
+  const landMap = new Uint8Array(landMapWidth * landMapHeight);
+
   const state = {
     rotation: -0.55,
     tilt: -0.12,
@@ -40,8 +51,16 @@
     dragMoved: false,
     lastFrame: 0,
     flash: null,
-    hits: 0
+    hits: 0,
+    projectiles: [],
+    beams: [],
+    landCanvas: document.createElement('canvas'),
+    landContext: null,
+    landImage: null,
+    touchPoints: new Map(),
+    pinch: null
   };
+  state.landContext = state.landCanvas.getContext('2d');
 
   const landCells = [];
   let totalLandArea = 0;
@@ -63,14 +82,6 @@
   }
 
   function buildLandGrid() {
-    const polygons = landmasses.map(points => ({
-      points,
-      minLongitude: Math.min(...points.map(point => point[0])),
-      maxLongitude: Math.max(...points.map(point => point[0])),
-      minLatitude: Math.min(...points.map(point => point[1])),
-      maxLatitude: Math.max(...points.map(point => point[1]))
-    }));
-
     for (let latitudeDegrees = -89.5; latitudeDegrees < 90; latitudeDegrees += 1) {
       const latitude = latitudeDegrees * Math.PI / 180;
       const weight = Math.cos(latitude);
@@ -78,7 +89,7 @@
       const latitudeBounds = latitudeDegrees;
       for (let longitudeDegrees = -179.5; longitudeDegrees < 180; longitudeDegrees += 1) {
         let isLand = false;
-        for (const polygon of polygons) {
+        for (const polygon of landPolygons) {
           if (longitudeDegrees < polygon.minLongitude || longitudeDegrees > polygon.maxLongitude
             || latitudeBounds < polygon.minLatitude || latitudeBounds > polygon.maxLatitude) continue;
           if (isInsidePolygon(longitudeDegrees, latitudeBounds, polygon.points)) {
@@ -96,6 +107,23 @@
           destroyed: false
         });
         totalLandArea += weight;
+      }
+    }
+  }
+
+  function buildLandMap() {
+    for (let row = 0; row < landMapHeight; row += 1) {
+      const latitude = 90 - (row + 0.5) * 180 / landMapHeight;
+      for (let column = 0; column < landMapWidth; column += 1) {
+        const longitude = -180 + (column + 0.5) * 360 / landMapWidth;
+        for (const polygon of landPolygons) {
+          if (longitude < polygon.minLongitude || longitude > polygon.maxLongitude
+            || latitude < polygon.minLatitude || latitude > polygon.maxLatitude) continue;
+          if (isInsidePolygon(longitude, latitude, polygon.points)) {
+            landMap[row * landMapWidth + column] = 1;
+            break;
+          }
+        }
       }
     }
   }
@@ -129,6 +157,25 @@
     updatePopulation();
   }
 
+  function prepareLandImage() {
+    const renderScale = Math.min(state.dpr, 1.5);
+    const size = Math.max(1, Math.ceil(state.radius * 2 * renderScale));
+    const needsResize = state.landCanvas.width === 0
+      || state.landCanvas.height === 0
+      || Math.abs(size - state.landCanvas.width) > Math.max(12, state.landCanvas.width * 0.08);
+    if (needsResize) {
+      state.landCanvas.width = size;
+      state.landCanvas.height = size;
+      state.landImage = state.landContext.createImageData(size, size);
+    }
+  }
+
+  function setZoom(zoom) {
+    state.zoom = Math.max(0.65, Math.min(2.4, zoom));
+    state.radius = state.baseRadius * state.zoom;
+    prepareLandImage();
+  }
+
   function resize() {
     const rect = wrap.getBoundingClientRect();
     state.dpr = Math.min(window.devicePixelRatio || 1, 2);
@@ -141,6 +188,7 @@
     canvas.style.width = `${rect.width}px`;
     canvas.style.height = `${rect.height}px`;
     ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+    prepareLandImage();
     makeStars();
   }
 
@@ -221,35 +269,44 @@
   }
 
   function drawLand(cx, cy) {
-    ctx.save();
-    ctx.beginPath();
-    ctx.arc(cx, cy, state.radius, 0, Math.PI * 2);
-    ctx.clip();
-    for (const shape of landmasses) {
-      let penDown = false;
-      ctx.beginPath();
-      for (const [longitude, latitude] of shape) {
-        const point = projectVector(rotatePoint(longitude * Math.PI / 180, latitude * Math.PI / 180), cx, cy);
-        if (point.depth > -0.04) {
-          if (!penDown) {
-            ctx.moveTo(point.x, point.y);
-            penDown = true;
-          } else ctx.lineTo(point.x, point.y);
-        } else {
-          penDown = false;
-        }
+    const image = state.landImage;
+    const size = image.width;
+    const pixels = image.data;
+    const renderRadius = size / 2;
+    const tiltCos = Math.cos(state.tilt);
+    const tiltSin = Math.sin(state.tilt);
+    pixels.fill(0);
+
+    for (let y = 0; y < size; y += 1) {
+      const screenY = -(y + 0.5 - renderRadius) / renderRadius;
+      const screenY2 = screenY * screenY;
+      for (let x = 0; x < size; x += 1) {
+        const screenX = (x + 0.5 - renderRadius) / renderRadius;
+        const depthSquared = 1 - screenX * screenX - screenY2;
+        if (depthSquared <= 0) continue;
+
+        const depth = Math.sqrt(depthSquared);
+        const worldY = screenY * tiltCos + depth * tiltSin;
+        const worldZ = depth * tiltCos - screenY * tiltSin;
+        const latitude = Math.asin(Math.max(-1, Math.min(1, worldY)));
+        const longitude = Math.atan2(screenX, worldZ) - state.rotation;
+        const column = ((Math.floor((longitude + Math.PI) / (Math.PI * 2) * landMapWidth) % landMapWidth) + landMapWidth) % landMapWidth;
+        const row = Math.max(0, Math.min(landMapHeight - 1, Math.floor((Math.PI / 2 - latitude) / Math.PI * landMapHeight)));
+        if (!landMap[row * landMapWidth + column]) continue;
+
+        const light = 0.84 + Math.max(0, worldY * 0.08 + worldZ * 0.12 - screenX * 0.05);
+        const index = (y * size + x) * 4;
+        pixels[index] = Math.round(91 * light);
+        pixels[index + 1] = Math.round(162 * light);
+        pixels[index + 2] = Math.round(92 * light);
+        pixels[index + 3] = 255;
       }
-      ctx.closePath();
-      const land = ctx.createLinearGradient(cx - state.radius, cy - state.radius, cx + state.radius, cy + state.radius);
-      land.addColorStop(0, '#72b966');
-      land.addColorStop(0.52, '#4d9d65');
-      land.addColorStop(1, '#286e64');
-      ctx.fillStyle = land;
-      ctx.fill();
-      ctx.strokeStyle = 'rgba(181, 232, 153, .38)';
-      ctx.lineWidth = 1;
-      ctx.stroke();
     }
+
+    state.landContext.putImageData(image, 0, 0);
+    ctx.save();
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(state.landCanvas, cx - state.radius, cy - state.radius, state.radius * 2, state.radius * 2);
     ctx.restore();
   }
 
@@ -347,12 +404,17 @@
     drawGrid(cx, cy);
     drawLand(cx, cy);
 
+    ctx.save();
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.clip();
     const shade = ctx.createLinearGradient(cx - r * .6, cy - r * .2, cx + r * .82, cy + r * .1);
     shade.addColorStop(0, 'rgba(0,0,0,0)');
     shade.addColorStop(.52, 'rgba(1,8,24,.04)');
     shade.addColorStop(1, 'rgba(0,5,20,.62)');
     ctx.fillStyle = shade;
     ctx.fillRect(cx - r, cy - r, r * 2, r * 2);
+    ctx.restore();
 
     ctx.save();
     ctx.beginPath();
@@ -383,17 +445,139 @@
     }
   }
 
+  function drawMissile(missile, time) {
+    const progress = Math.min(1, (time - missile.started) / missile.duration);
+    const x = missile.fromX + (missile.toX - missile.fromX) * progress;
+    const y = missile.fromY + (missile.toY - missile.fromY) * progress;
+    const angle = Math.atan2(missile.toY - missile.fromY, missile.toX - missile.fromX);
+
+    ctx.save();
+    ctx.globalAlpha = Math.min(1, progress * 5 + 0.25);
+    ctx.strokeStyle = 'rgba(255, 115, 49, .4)';
+    ctx.lineWidth = 5;
+    ctx.lineCap = 'round';
+    ctx.shadowColor = '#ff542e';
+    ctx.shadowBlur = 12;
+    ctx.beginPath();
+    ctx.moveTo(missile.fromX, missile.fromY);
+    ctx.lineTo(x, y);
+    ctx.stroke();
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+
+    const flame = ctx.createLinearGradient(-14, 0, -3, 0);
+    flame.addColorStop(0, 'rgba(255, 60, 25, 0)');
+    flame.addColorStop(1, '#ffe4a1');
+    ctx.fillStyle = flame;
+    ctx.beginPath();
+    ctx.moveTo(-13, 0);
+    ctx.lineTo(-4, -2.4);
+    ctx.lineTo(-4, 2.4);
+    ctx.closePath();
+    ctx.fill();
+
+    const body = ctx.createLinearGradient(-5, -3, 8, 3);
+    body.addColorStop(0, '#f76c3d');
+    body.addColorStop(0.55, '#ffe0a2');
+    body.addColorStop(1, '#fff8db');
+    ctx.fillStyle = body;
+    ctx.beginPath();
+    ctx.moveTo(10, 0);
+    ctx.lineTo(3, -3);
+    ctx.lineTo(-6, -2.1);
+    ctx.lineTo(-7, 0);
+    ctx.lineTo(-6, 2.1);
+    ctx.lineTo(3, 3);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawLaserBeam(beam, time) {
+    const isHolding = beam.holding && state.pointer && state.pointer.beam === beam && !state.dragMoved;
+    const opacity = isHolding ? 1 : Math.max(0, (beam.endAt - time) / 180);
+    if (opacity <= 0) return;
+
+    const flicker = isHolding ? 1 + Math.sin(time * 0.06) * 0.035 : 1;
+    const endX = beam.x + Math.sin(time * 0.035) * (isHolding ? 1.2 : 0);
+    const endY = beam.y + Math.cos(time * 0.04) * (isHolding ? 1.2 : 0);
+    ctx.save();
+    ctx.globalAlpha = opacity;
+    ctx.lineCap = 'round';
+    ctx.shadowColor = '#38caff';
+    ctx.shadowBlur = 16;
+    ctx.strokeStyle = 'rgba(39, 176, 255, .5)';
+    ctx.lineWidth = 7 * flicker;
+    ctx.beginPath();
+    ctx.moveTo(state.width / 2, state.height / 2);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.shadowBlur = 5;
+    ctx.strokeStyle = 'rgba(118, 228, 255, .98)';
+    ctx.lineWidth = 2.4 * flicker;
+    ctx.beginPath();
+    ctx.moveTo(state.width / 2, state.height / 2);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = 'rgba(255, 255, 255, .95)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(state.width / 2, state.height / 2);
+    ctx.lineTo(endX, endY);
+    ctx.stroke();
+    const endpoint = ctx.createRadialGradient(endX, endY, 1, endX, endY, 12);
+    endpoint.addColorStop(0, 'rgba(255, 250, 222, .95)');
+    endpoint.addColorStop(0.3, 'rgba(117, 222, 255, .85)');
+    endpoint.addColorStop(1, 'rgba(53, 185, 255, 0)');
+    ctx.fillStyle = endpoint;
+    ctx.beginPath();
+    ctx.arc(endX, endY, 12, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function finishLaserBeam(beam, time = performance.now()) {
+    if (!beam) return;
+    beam.holding = false;
+    beam.endAt = time + 180;
+  }
+
+  function advanceAnimations(time) {
+    if (state.pointer && state.pointer.drilling && !state.dragMoved) {
+      const elapsed = time - state.pointer.lastDrillTime;
+      if ((!state.pointer.hasHit && elapsed >= 100) || (state.pointer.hasHit && elapsed >= 320)) {
+        applyImpact(state.pointer.drillWorld, 'laser');
+        state.pointer.hasHit = true;
+        state.pointer.lastDrillTime = time;
+      }
+    }
+
+    for (let i = state.projectiles.length - 1; i >= 0; i -= 1) {
+      const missile = state.projectiles[i];
+      if (time - missile.started >= missile.duration) {
+        applyImpact(missile.world, 'bomb');
+        state.projectiles.splice(i, 1);
+      }
+    }
+
+    state.beams = state.beams.filter(beam => beam.holding || beam.endAt > time);
+  }
+
+  function drawAttacks(time) {
+    for (const missile of state.projectiles) drawMissile(missile, time);
+    for (const beam of state.beams) drawLaserBeam(beam, time);
+  }
+
   function animate(time) {
     const delta = state.lastFrame ? Math.min((time - state.lastFrame) / 16.67, 2) : 1;
     state.lastFrame = time;
-    if (state.pointer && state.pointer.drilling && !state.dragMoved && time - state.pointer.lastDrillTime >= 320) {
-      applyImpact(state.pointer.drillWorld, 'laser');
-      state.pointer.lastDrillTime = time;
-    }
-    if (!state.pointer) state.rotation += 0.0007 * state.sensitivity * delta;
+    advanceAnimations(time);
+    if (!state.pointer && !state.projectiles.length) state.rotation += 0.0007 * state.sensitivity * delta;
     ctx.clearRect(0, 0, state.width, state.height);
     drawStars(time);
     drawPlanet(state.width / 2, state.height / 2, time);
+    drawAttacks(time);
     requestAnimationFrame(animate);
   }
 
@@ -444,53 +628,144 @@
       destroyLandUnder(impact);
     }
     state.hits += 1;
-    state.flash = { ...world, radiusRatio };
+    state.flash = { ...world, radiusRatio, created: performance.now() };
     updateMissionStatus();
     stageMessage.textContent = weapon === 'bomb' ? '플라즈마 폭탄 충돌' : '에너지 레이저로 지층을 굴착 중';
   }
 
-  function impactAt(point, weapon = state.weapon) {
+  function launchBomb(point) {
     const world = hitPlanet(point);
-    if (world) applyImpact(world, weapon);
+    if (!world) return;
+    state.projectiles.push({
+      fromX: state.width / 2,
+      fromY: state.height / 2,
+      toX: point.x,
+      toY: point.y,
+      world,
+      started: performance.now(),
+      duration: 640
+    });
+    stageMessage.textContent = '탄두 미사일 발사 · 충돌 대기 중';
+  }
+
+  function beginLaserBeam(point, pointerId) {
+    const world = hitPlanet(point);
+    if (!world) return null;
+    const beam = {
+      x: point.x,
+      y: point.y,
+      world,
+      pointerId,
+      holding: true,
+      endAt: Infinity
+    };
+    state.beams.push(beam);
+    return beam;
+  }
+
+  function launchAttack(point) {
+    if (state.weapon === 'bomb') {
+      launchBomb(point);
+      return;
+    }
+    const beam = beginLaserBeam(point, null);
+    if (beam) {
+      applyImpact(beam.world, 'laser');
+      finishLaserBeam(beam);
+    }
   }
 
   canvas.addEventListener('pointerdown', event => {
+    canvas.setPointerCapture(event.pointerId);
     const point = pointerCoordinates(event);
-    const drilling = state.weapon === 'laser' && hitPlanet(point);
+    if (event.pointerType === 'touch') {
+      state.touchPoints.set(event.pointerId, point);
+      if (state.touchPoints.size >= 2) {
+        if (state.pointer && state.pointer.beam) finishLaserBeam(state.pointer.beam);
+        state.pointer = null;
+        state.dragMoved = true;
+        if (state.touchPoints.size === 2) {
+          const [first, second] = Array.from(state.touchPoints.values());
+          state.pinch = {
+            distance: Math.hypot(second.x - first.x, second.y - first.y),
+            zoom: state.zoom
+          };
+        }
+        return;
+      }
+    }
+    if (state.pinch) return;
+
+    const beam = state.weapon === 'laser' ? beginLaserBeam(point, event.pointerId) : null;
     state.pointer = {
       ...point,
       id: event.pointerId,
-      drilling: Boolean(drilling),
-      drillWorld: drilling || null,
+      drilling: Boolean(beam),
+      drillWorld: beam ? beam.world : null,
+      beam,
+      hasHit: false,
       lastDrillTime: performance.now()
     };
     state.dragMoved = false;
-    if (drilling) applyImpact(drilling, 'laser');
-    canvas.setPointerCapture(event.pointerId);
   });
 
   canvas.addEventListener('pointermove', event => {
+    if (event.pointerType === 'touch' && state.touchPoints.has(event.pointerId)) {
+      state.touchPoints.set(event.pointerId, pointerCoordinates(event));
+    }
+    if (state.pinch) {
+      const points = Array.from(state.touchPoints.values());
+      if (points.length >= 2) {
+        const distance = Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y);
+        if (state.pinch.distance > 0) setZoom(state.pinch.zoom * distance / state.pinch.distance);
+      }
+      return;
+    }
     if (!state.pointer || state.pointer.id !== event.pointerId) return;
     const point = pointerCoordinates(event);
     const dx = point.x - state.pointer.x;
     const dy = point.y - state.pointer.y;
-    if (Math.abs(dx) + Math.abs(dy) > 2) state.dragMoved = true;
+    if (Math.abs(dx) + Math.abs(dy) > 2) {
+      state.dragMoved = true;
+      finishLaserBeam(state.pointer.beam);
+    }
     state.rotation += dx / state.radius * state.sensitivity;
     state.tilt = Math.max(-0.75, Math.min(0.75, state.tilt + dy / state.radius * state.sensitivity));
     state.pointer = { ...state.pointer, ...point };
   });
 
   canvas.addEventListener('pointerup', event => {
+    if (event.pointerType === 'touch') state.touchPoints.delete(event.pointerId);
+    if (state.pinch) {
+      if (state.touchPoints.size < 2) {
+        state.pinch = null;
+        state.pointer = null;
+      }
+      return;
+    }
     if (!state.pointer || state.pointer.id !== event.pointerId) return;
-    if (!state.dragMoved && !state.pointer.drilling) impactAt(pointerCoordinates(event));
+    if (!state.dragMoved) {
+      if (state.pointer.drilling) {
+        if (!state.pointer.hasHit) applyImpact(state.pointer.drillWorld, 'laser');
+        finishLaserBeam(state.pointer.beam);
+      } else {
+        launchAttack(pointerCoordinates(event));
+      }
+    } else {
+      finishLaserBeam(state.pointer.beam);
+    }
     state.pointer = null;
   });
-  canvas.addEventListener('pointercancel', () => { state.pointer = null; });
+  canvas.addEventListener('pointercancel', event => {
+    if (event.pointerType === 'touch') state.touchPoints.delete(event.pointerId);
+    if (state.pointer && state.pointer.id === event.pointerId) finishLaserBeam(state.pointer.beam);
+    state.pointer = null;
+    if (state.touchPoints.size < 2) state.pinch = null;
+  });
 
   canvas.addEventListener('wheel', event => {
     event.preventDefault();
-    state.zoom = Math.max(0.65, Math.min(2.4, state.zoom * Math.exp(-event.deltaY * 0.0015)));
-    state.radius = state.baseRadius * state.zoom;
+    setZoom(state.zoom * Math.exp(-event.deltaY * 0.0015));
   }, { passive: false });
 
   document.querySelectorAll('.weapon-button').forEach(button => {
@@ -517,12 +792,15 @@
     state.hits = 0;
     destroyedLandArea = 0;
     for (const cell of landCells) cell.destroyed = false;
+    state.projectiles = [];
+    state.beams = [];
+    state.touchPoints.clear();
+    state.pinch = null;
     state.pointer = null;
     state.flash = null;
     state.rotation = -0.55;
     state.tilt = -0.12;
-    state.zoom = 1;
-    state.radius = state.baseRadius;
+    setZoom(1);
     updateMissionStatus();
     updatePopulation();
     stageMessage.textContent = '드래그하여 지구를 회전하세요';
@@ -530,6 +808,7 @@
 
   window.addEventListener('resize', resize);
   buildLandGrid();
+  buildLandMap();
   updatePopulation();
   resize();
   requestAnimationFrame(animate);
