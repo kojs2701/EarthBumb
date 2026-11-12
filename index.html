@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#070b15">
+  <meta name="description" content="지구를 돌려보고 폭탄과 레이저로 표면을 바꿔보는 행성 파괴 시뮬레이터">
+  <title>행성 파괴 시뮬레이터</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a class="brand" href="#" aria-label="오비탈 홈">
+        <span class="brand-mark" aria-hidden="true">◉</span>
+        <span>ORBITAL<span class="brand-sub">PLANETARY LAB</span></span>
+      </a>
+      <div class="live-status"><span class="status-dot"></span> 시뮬레이션 준비 완료</div>
+      <button class="reset-button" id="reset-button" type="button" title="시뮬레이션 초기화">
+        <span aria-hidden="true">↻</span><span class="reset-label">초기화</span>
+      </button>
+    </header>
+
+    <main class="workspace">
+      <aside class="control-panel" aria-label="시뮬레이션 설정">
+        <div class="panel-heading">
+          <div class="eyebrow">CONTROL DECK</div>
+          <h1>행성 파괴<br>시뮬레이터</h1>
+          <p>지구를 회전하고 원하는 지점을 타격해 보세요.</p>
+        </div>
+
+        <section class="control-section">
+          <div class="section-title"><span class="step-number">01</span> 파괴 도구</div>
+          <div class="weapon-list" role="group" aria-label="파괴 도구 선택">
+            <button class="weapon-button is-selected" type="button" data-weapon="bomb" aria-pressed="true">
+              <span class="weapon-icon bomb-icon" aria-hidden="true">✹</span>
+              <span class="weapon-copy"><strong>플라즈마 폭탄</strong><small>강한 충격 · 넓은 크레이터</small></span>
+              <span class="select-mark" aria-hidden="true">✓</span>
+            </button>
+            <button class="weapon-button" type="button" data-weapon="laser" aria-pressed="false">
+              <span class="weapon-icon laser-icon" aria-hidden="true">⌁</span>
+              <span class="weapon-copy"><strong>에너지 레이저</strong><small>길게 눌러 굴착 · 누를수록 깊게</small></span>
+              <span class="select-mark" aria-hidden="true">✓</span>
+            </button>
+          </div>
+        </section>
+
+        <section class="control-section rotation-section">
+          <div class="section-title"><span class="step-number">02</span> 회전 감도</div>
+          <div class="range-labels"><span>느리게</span><strong id="sensitivity-value">보통</strong><span>빠르게</span></div>
+          <input id="sensitivity" type="range" min="0.4" max="2.4" step="0.1" value="1" aria-label="행성 회전 감도">
+          <p class="hint">행성을 드래그해 회전하세요.</p>
+        </section>
+
+        <section class="control-section mission-section">
+          <div class="section-title"><span class="step-number">03</span> 미션 현황</div>
+          <div class="mission-stats">
+            <div class="stat-card"><span>누적 타격</span><strong id="impact-count">00</strong></div>
+            <div class="stat-card"><span>행성 상태</span><strong class="planet-condition" id="planet-condition">정상</strong></div>
+          </div>
+        </section>
+
+        <div class="panel-tip"><span aria-hidden="true">ⓘ</span><p><strong>조작 방법</strong><br>드래그로 회전 · 휠로 확대/축소 · 클릭하여 타격</p></div>
+        <div class="panel-footer"><span>EARTH / SOL-3</span><span>v1.0.0</span></div>
+      </aside>
+
+      <section class="simulation-stage" aria-label="지구 시뮬레이션">
+        <div class="stage-topline">
+          <div class="target-name"><span class="target-icon">◎</span><span><strong>EARTH</strong><small>지구 · 태양계 제3행성</small></span></div>
+          <div class="stage-readouts">
+            <div class="coordinate-readout"><span class="readout-dot"></span> LIVE SIMULATION</div>
+            <div class="population-card" aria-label="지구 인구 및 남은 육지 면적">
+              <div class="population-meta"><span>생존 인구</span><strong id="population-count">82.00억 명</strong></div>
+              <small id="land-remains">육지 100.00% 유지</small>
+            </div>
+          </div>
+        </div>
+        <div class="planet-wrap" id="planet-wrap">
+          <canvas id="space-canvas" aria-label="회전하고 타격할 수 있는 지구"></canvas>
+          <div class="orbit orbit-one"></div>
+          <div class="orbit orbit-two"></div>
+          <div class="planet-caption"><span class="caption-line"></span><span id="stage-message">드래그하여 지구를 회전하세요</span></div>
+        </div>
+        <div class="stage-bottomline">
+          <div class="drag-hint"><span class="mouse-icon" aria-hidden="true">↔</span> 드래그 회전 <span class="hint-divider">·</span> 휠 확대/축소 <span class="hint-divider">·</span> 클릭 타격</div>
+          <div class="planet-scale"><span>직경</span><strong>12,742 km</strong></div>
+        </div>
+      </section>
+    </main>
+  </div>
+</body>
+</html>
